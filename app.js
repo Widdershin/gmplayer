@@ -10,6 +10,8 @@ var os = require('os');
 var m3u = require('m3u');
 var Q = require('q');
 var _ = require('lodash');
+var mkdirp = require('mkdirp');
+var path = require('path');
 
 var resultTypes = {
   track: '1',
@@ -102,9 +104,15 @@ function search (query, resultsFilter) {
     playmusic.search(query, 20, function (err, results) {
       if (err) {
         cli.error(err);
-        deferred.reject(err);
+        cli.spinner('', true);
+        return deferred.reject(err);
       }
 
+      if (!results.entries) {
+        cli.spinner('', true);
+        cli.error('No songs/albums were found with your query, please try again!');
+        return deferred.reject(err);
+      }
       return deferred.resolve(results.entries.filter(resultsFilter));
     });
   });
@@ -180,10 +188,10 @@ function mplayerArgs (filename, isPlaylist) {
   var audioEngine = audioEngines[os.platform()];
 
   if (isPlaylist) {
-    return ['-ao', audioEngine, '-playlist', getLocation('music') + filename];
+    return ['-ao', audioEngine, '-playlist', filename];
   }
 
-  return ['-ao', audioEngine, getLocation('music') + filename];
+  return ['-ao', audioEngine, filename];
 }
 
 function playAlbum (playlistFile) {
@@ -197,7 +205,7 @@ function play(file, playlist) {
   var player = mplayer('mplayer', mplayerArgs(file, playlist));
   var isfiltered = false;
 
-  console.log('Playing ' + file + '\n');
+  console.log('Playing ' + path.basename(file) + '\n');
 
   player.stdout.on('data', function (data) {
     if (data.toString().substr(0,2) == 'A:' && !isfiltered) {
@@ -221,11 +229,12 @@ function play(file, playlist) {
 
 function download (track) {
   var deferred = Q.defer();
-  var songname = track.title + ' - ' + track.artist + '.mp3';
+  var songPath = getTrackPath(track);
+  var songDirectory = getTrackDirectory(track);
 
-  if (fs.existsSync(getLocation('music') + songname)) {
+  if (fs.existsSync(songPath)) {
     console.log('Song already found in offline storage, playing that instead.');
-    deferred.resolve(songname);
+    deferred.resolve(songPath);
 
     return deferred.promise;
   }
@@ -237,19 +246,23 @@ function download (track) {
       return;
     }
 
-    http.get(url, function (res) {
-      res.on('data', function (data) {
-        if (!fs.existsSync(getLocation('music') + songname)) {
-          fs.writeFileSync(getLocation('music') + songname, data);
-        } else {
-          fs.appendFileSync(getLocation('music') + songname, data);
-        }
-      });
+    mkdirp(songDirectory, function (err) {
+      if (err) cli.error(err);
 
-      res.on('end', function () {
-        deferred.resolve(songname);
+      http.get(url, function (res) {
+        res.on('data', function (data) {
+          if (!fs.existsSync(songPath)) {
+            fs.writeFileSync(songPath, data);
+          } else {
+            fs.appendFileSync(songPath, data);
+          }
+        });
+
+        res.on('end', function () {
+          deferred.resolve(songPath);
+        });
       });
-    });
+    })
   });
 
   return deferred.promise;
@@ -269,8 +282,7 @@ function downloadAlbum (album) {
     cli.spinner('Downloading ' + fullAlbumDetails.artist + ' - ' + fullAlbumDetails.name);
 
     var downloadPromises = fullAlbumDetails.tracks.map(function (track) {
-      var songName = track.title + ' - ' + track.artist + '.mp3';
-      m3uWriter.file(getLocation('music') + songName);
+      m3uWriter.file(getTrackFilename(track));
       return download(track);
     });
 
@@ -284,11 +296,14 @@ function downloadAlbum (album) {
 }
 
 function writePlaylist (writer, album) {
-  var playlistPath = getLocation('music') + album.name + '.m3u';
+  var playlistPath = path.join(
+    getAlbumDirectory(album),
+    sanitizeFilename(album.artist + ' - ' + album.name + '.m3u')
+  );
 
   fs.writeFileSync(playlistPath, writer.toString());
 
-  return album.name + '.m3u';
+  return playlistPath;
 }
 
 function getLocation(type) {
@@ -297,7 +312,38 @@ function getLocation(type) {
       return process.env['HOME'] + '/.gmplayerrc';
     break;
     case 'music':
-      return process.env['HOME'] + '/Music/';
+      return process.env['HOME'] + '/Music/gmplayer';
     break;
   }
+}
+
+function getTrackFilename (track) {
+  return sanitizeFilename(track.title + '.mp3');
+}
+
+function getAlbumDirectory (album) {
+  return path.join(
+    getLocation('music'),
+    sanitizeFilename(album.artist),
+    sanitizeFilename(album.name)
+  );
+}
+
+function getTrackDirectory (track) {
+  return path.join(
+    getLocation('music'),
+    sanitizeFilename(track.artist),
+    sanitizeFilename(track.album)
+  );
+}
+
+function getTrackPath (track) {
+  return path.join(
+    getTrackDirectory(track),
+    getTrackFilename(track)
+  );
+}
+
+function sanitizeFilename (filename) {
+  return filename.replace(/\//g, '|');
 }
