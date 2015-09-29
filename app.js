@@ -7,8 +7,9 @@ var chalk = require('chalk');
 var playmusic = new (require('playmusic'))();
 var mplayer = require('child_process').spawn;
 var os = require('os');
-var m3uWriter = require('m3u').extendedWriter();
+var m3u = require('m3u');
 var Q = require('q');
+var _ = require('lodash');
 
 var resultTypes = {
   track: '1',
@@ -28,6 +29,7 @@ var filters = {
 cli.parse({
   song: ['s', 'The song you want to download/play.'],
   album: ['a', 'The album you want to download/play.'],
+  'album-shuffle': ['A', 'Shuffle through albums in your library'],
   downloadonly: ['d', 'If you only want to download the song instead of playing it'],
   // offline: ['o', 'If you want to listen to already downloaded songs']
 });
@@ -46,10 +48,46 @@ cli.main(function (args, options) {
       .then(downloadAlbum)
       .then(playAlbum);
   }
+
+  if (options['album-shuffle']) {
+    fetchAlbums()
+      .then(_.shuffle)
+      .then(playEachAlbum)
+  }
   // else if (options.offline) {
   //   offline();
   // }
 });
+
+function fetchAlbums () {
+  var deferred = Q.defer();
+
+  playmusic.init({email: settings().email, password: settings().password}, function (err) {
+    if (err) {
+      console.warn(err);
+      deferred.reject(err);
+      return;
+    }
+
+    playmusic.getLibrary(function (err, tracks) {
+      var albums = _.uniq(
+        tracks.data.items
+          .filter(track => 'albumId' in track)
+          .map(track => ({albumId: track.albumId}))
+      );
+
+      deferred.resolve(albums);
+    });
+  });
+
+  return deferred.promise;
+}
+
+function playEachAlbum (albums) {
+  albums.reduce((promise, albumToPlay) => {
+    return promise.then(() => downloadAlbum(albumToPlay)).then(playAlbum);
+  }, Q());
+}
 
 function search (query, resultsFilter) {
   var deferred = Q.defer();
@@ -149,10 +187,11 @@ function mplayerArgs (filename, isPlaylist) {
 }
 
 function playAlbum (playlistFile) {
-  play(playlistFile, true);
+  return play(playlistFile, true);
 }
 
 function play(file, playlist) {
+  var deferred = Q.defer();
   playlist = !!playlist; // default to false
 
   var player = mplayer('mplayer', mplayerArgs(file, playlist));
@@ -174,6 +213,10 @@ function play(file, playlist) {
   player.on('error', function (data) {
     cli.fatal('There was an error playing your song, maybe you need to install mplayer?');
   });
+
+  player.on('exit', deferred.resolve.bind(deferred));
+
+  return deferred.promise;
 }
 
 function download (track) {
@@ -214,14 +257,16 @@ function download (track) {
 
 function downloadAlbum (album) {
   var deferred = Q.defer();
+  var m3uWriter = m3u.extendedWriter();
 
   playmusic.getAlbum(album.albumId, true, function (err, fullAlbumDetails) {
     if (err) {
       console.warn(err);
       deferred.reject(err);
+      return;
     }
 
-    cli.spinner('Downloading ' + album.name);
+    cli.spinner('Downloading ' + fullAlbumDetails.artist + ' - ' + fullAlbumDetails.name);
 
     var downloadPromises = fullAlbumDetails.tracks.map(function (track) {
       var songName = track.title + ' - ' + track.artist + '.mp3';
@@ -231,7 +276,7 @@ function downloadAlbum (album) {
 
     Q.all(downloadPromises).then(function () {
       cli.spinner('', true);
-      return writePlaylist(m3uWriter, album);
+      return writePlaylist(m3uWriter, fullAlbumDetails);
     }).then(deferred.resolve);
   });
 
