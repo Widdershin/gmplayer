@@ -1,6 +1,6 @@
 {
   "name": "gmplayer",
-  "version": "0.0.2",
+  "version": "0.1.1",
   "description": "A CLI music player using Google Play Music as a source",
   "main": "app.js",
   "dependencies": {

@@ -96,15 +96,16 @@ function search (query, resultsFilter) {
 
   playmusic.init({email: settings().email, password: settings().password}, function (err) {
     if (err) {
-      console.warn(err);
+      cli.spinner('', true);
+      cli.error(err);
       deferred.reject(err);
       return;
     }
 
     playmusic.search(query, 20, function (err, results) {
       if (err) {
-        cli.error(err);
         cli.spinner('', true);
+        cli.error(err);
         return deferred.reject(err);
       }
 
@@ -166,10 +167,13 @@ function settings() {
   if (!fs.existsSync(getLocation('settings'))) {
     var settings = {
       'email': 'add_your_email_here',
-      'password': 'add_your_password_here'
+      'password': 'add_your_password_here',
+      'tracknaming': '{title} - {artist}',
+      'albumnaming': '{album}',
+      'playlistnaming': '{name} - {albumArtist}'
     };
 
-    fs.writeFileSync(getLocation('settings'), JSON.stringify(settings));
+    fs.writeFileSync(getLocation('settings'), JSON.stringify(settings, null, 2));
     cli.fatal('Go to ~/.gmplayerrc and add your email and password');
   }
   else {
@@ -222,7 +226,9 @@ function play(file, playlist) {
     cli.fatal('There was an error playing your song, maybe you need to install mplayer?');
   });
 
-  player.on('exit', deferred.resolve.bind(deferred));
+  player.on('exit', function () {
+    deferred.resolve();
+  });
 
   return deferred.promise;
 }
@@ -282,6 +288,7 @@ function downloadAlbum (album) {
     cli.spinner('Downloading ' + fullAlbumDetails.artist + ' - ' + fullAlbumDetails.name);
 
     var downloadPromises = fullAlbumDetails.tracks.map(function (track) {
+      track.albumArtist = fullAlbumDetails.albumArtist;
       m3uWriter.file(getTrackFilename(track));
       return download(track);
     });
@@ -296,9 +303,15 @@ function downloadAlbum (album) {
 }
 
 function writePlaylist (writer, album) {
+  /* FIXME
+    This is a temp fix for a custonNaming function issue,
+    the getAlbumDirectory is also called during the downloading of tracks
+    but the within this context the supplied object is different (album instead of track)
+  */
+  album.album = album.name;
   var playlistPath = path.join(
     getAlbumDirectory(album),
-    sanitizeFilename(album.artist + ' - ' + album.name + '.m3u')
+    customNaming(settings().playlistnaming, album) + '.m3u'
   );
 
   fs.writeFileSync(playlistPath, writer.toString());
@@ -310,30 +323,28 @@ function getLocation(type) {
   switch (type) {
     case 'settings':
       return process.env['HOME'] + '/.gmplayerrc';
-    break;
+      break;
     case 'music':
       return process.env['HOME'] + '/Music/gmplayer';
-    break;
+      break;
   }
 }
 
 function getTrackFilename (track) {
-  return sanitizeFilename(track.title + '.mp3');
+  return customNaming(settings().tracknaming, track) + '.mp3';
 }
 
 function getAlbumDirectory (album) {
   return path.join(
     getLocation('music'),
-    sanitizeFilename(album.artist),
-    sanitizeFilename(album.name)
+    customNaming(settings().albumnaming, album)
   );
 }
 
 function getTrackDirectory (track) {
   return path.join(
     getLocation('music'),
-    sanitizeFilename(track.artist),
-    sanitizeFilename(track.album)
+    customNaming(settings().albumnaming, track)
   );
 }
 
@@ -344,6 +355,20 @@ function getTrackPath (track) {
   );
 }
 
-function sanitizeFilename (filename) {
-  return filename.replace(/\//g, '|');
+function sanitize (filename) {
+  if (typeof filename !== 'string') { return; }
+
+  return filename.replace(/\/|\\/g, '|');
+}
+
+function customNaming (string, info) {
+  string = string.slice(); // duplicate string to avoid mutation issues
+
+  for (var meta in info) {
+    if (info.hasOwnProperty(meta)) {
+      string = string.replace(new RegExp('{' + meta + '}', 'g'), sanitize(info[meta]));
+    }
+  }
+
+  return string;
 }
