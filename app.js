@@ -33,6 +33,7 @@ cli.parse({
   album: ['a', 'The album you want to download/play.'],
   'album-shuffle': ['A', 'Shuffle through albums in your library'],
   downloadonly: ['d', 'If you only want to download the song instead of playing it'],
+  lucky: ['l', 'Are you feeling lucky?']
   // offline: ['o', 'If you want to listen to already downloaded songs']
 });
 
@@ -40,13 +41,13 @@ cli.main(function (args, options) {
   settings();
 
   if (options.song) {
-    lookup(args.join(' '))
+    lookup(args.join(' '), options.lucky)
       .then(download)
       .then(play);
   }
 
   if (options.album) {
-    lookupAlbum(args.join(' '))
+    lookupAlbum(args.join(' '), options.lucky)
       .then(downloadAlbum)
       .then(playAlbum);
   }
@@ -121,12 +122,19 @@ function search (query, resultsFilter) {
   return deferred.promise;
 }
 
-function lookup (query) {
+function lookup (query, lucky) {
   var deferred = Q.defer();
+  var lucky = !!lucky;
 
   cli.spinner('Looking up requested song');
 
   search(query, filters.onlyTracks).then(function (results) {
+    if (lucky) {
+      cli.spinner('', true);
+      deferred.resolve(results[0].track);
+      return;
+    }
+
     process.stdout.write('\n');
 
     results.forEach(function (entry, index) {
@@ -142,12 +150,19 @@ function lookup (query) {
   return deferred.promise;
 }
 
-function lookupAlbum (query) {
+function lookupAlbum (query, lucky) {
   var deferred = Q.defer();
+  var lucky = !!lucky;
 
   cli.spinner('Looking up requested album');
 
   search(query, filters.onlyAlbums).then(function (results) {
+    if (lucky) {
+      cli.spinner('', true);
+      deferred.resolve(results[0].album);
+      return;
+    };
+
     process.stdout.write('\n');
 
     results.forEach(function (entry, index) {
